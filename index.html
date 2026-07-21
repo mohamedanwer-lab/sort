@@ -457,10 +457,19 @@ async function getAssignment(business, code){
     return (r && r.value) ? JSON.parse(r.value) : null;
   }catch(e){ return null; }
 }
-async function setAssignment(business, code, location){
-  const payload = {location, updatedAt: new Date().toISOString()};
-  try{ await window.storage.set(assignmentKey(business, code), JSON.stringify(payload), true); }catch(e){}
-  return payload;
+async function setAssignment(business, code, location) {
+    const payload = {
+        location: location,
+        updatedAt: new Date().toISOString()
+    };
+
+    const key = assignmentKey(business, code);
+
+    console.log("Saving:", key, payload);
+
+    localStorage.setItem(key, JSON.stringify(payload));
+
+    return payload;
 }
 async function clearAssignment(business, code){
   try{ await window.storage.delete(assignmentKey(business, code), true); }catch(e){}
