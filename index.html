@@ -257,7 +257,10 @@
 
   <div class="status-row">
     <span id="statusText"><span class="dot loading" id="statusDot"></span>بيحمل الداتا من الشيت...</span>
-    <button id="refreshBtn">تحديث</button>
+    <div style="display:flex;gap:8px;">
+      <button id="newSortBtn" style="background:var(--yellow);border:none;color:#1a1a1a;font-family:'Cairo',sans-serif;font-size:12px;font-weight:800;padding:6px 12px;border-radius:8px;cursor:pointer;">↻ سورت جديد</button>
+      <button id="refreshBtn">تحديث</button>
+    </div>
   </div>
 
   <!-- Step 1: business -->
@@ -323,7 +326,8 @@ const SHEET_CSV_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/t
 let rows = [];               // all parsed rows
 let businesses = [];         // unique business names
 let skuIndex = [];           // {code,name,business,label}
-let currentTargetRows = [];  // rows matching the exact chosen sku (+business if set)
+let currentSkuObj = null;    // {code, name, business} of the chosen sku
+let currentAssignment = null;// {location, updatedAt} built inside the tool, not from the sheet
 let currentBusiness = "";
 let currentSkuCode = "";
 let sessionLog = [];
@@ -437,37 +441,56 @@ function tryPickSku(){
   currentSkuCode = chosen.code;
   currentBusiness = b || chosen.business;
   if(!b) businessInput.value = chosen.business;
-  currentTargetRows = rows.filter(r => norm(r['SELLER SKU CODE']).toLowerCase() === currentSkuCode.toLowerCase() && norm(r['SELLER NAME']) === currentBusiness);
+  currentSkuObj = chosen;
   showPicked(chosen);
 }
 
-function existingLocations(){
-  const locs = new Set();
-  currentTargetRows.forEach(r=>{
-    const l = norm(r['LOCATION BARCODE']);
-    if(l) locs.add(l);
-  });
-  return [...locs];
+// ---- assignment storage: purely built inside the tool, not from the sheet ----
+// shared:true so every user of this tool sees the same location assignments
+function assignmentKey(business, code){
+  return `loc:${business}||${code}`.slice(0,190);
+}
+async function getAssignment(business, code){
+  try{
+    const r = await window.storage.get(assignmentKey(business, code), true);
+    return (r && r.value) ? JSON.parse(r.value) : null;
+  }catch(e){ return null; }
+}
+async function setAssignment(business, code, location){
+  const payload = {location, updatedAt: new Date().toISOString()};
+  try{ await window.storage.set(assignmentKey(business, code), JSON.stringify(payload), true); }catch(e){}
+  return payload;
+}
+async function clearAssignment(business, code){
+  try{ await window.storage.delete(assignmentKey(business, code), true); }catch(e){}
 }
 
-function showPicked(chosen){
-  const locs = existingLocations();
+async function showPicked(chosen){
   pickedSku.classList.add('show');
   pickedSku.innerHTML = `
     <div class="name">${escapeHtml(chosen.name || chosen.code)}</div>
     <div class="meta">${escapeHtml(currentBusiness)} · ${escapeHtml(chosen.code)}</div>
-    ${ locs.length
-        ? locs.map(l=>`<span class="loc-tag">📍 ${escapeHtml(l)}</span>`).join(' ')
-        : `<span class="loc-tag none">مفيش لوكيشن مسجل - أول مرة</span>` }
+    <span class="loc-tag none">بيدوّر على تسجيل سابق...</span>
   `;
   scanCard.classList.add('active');
-  peekTab.classList.add('show');
+  peekTab.classList.remove('show');
   resultBox.classList.remove('show');
+
+  currentAssignment = await getAssignment(currentBusiness, currentSkuCode);
+  pickedSku.innerHTML = `
+    <div class="name">${escapeHtml(chosen.name || chosen.code)}</div>
+    <div class="meta">${escapeHtml(currentBusiness)} · ${escapeHtml(chosen.code)}</div>
+    ${ currentAssignment
+        ? `<span class="loc-tag">📍 ${escapeHtml(currentAssignment.location)}</span>`
+        : `<span class="loc-tag none">مفيش لوكيشن متسجل - أول مرة</span>` }
+  `;
+  if(currentAssignment){ peekTab.classList.add('show'); }
   setTimeout(()=>scanInput.focus(), 50);
 }
 
 function resetTarget(){
-  currentTargetRows = [];
+  currentSkuObj = null;
+  currentAssignment = null;
   currentSkuCode = '';
   currentBusiness = '';
   pickedSku.classList.remove('show');
@@ -477,27 +500,38 @@ function resetTarget(){
   resultBox.classList.remove('show');
 }
 
-function confirmScan(){
+async function confirmScan(){
   const scanned = norm(scanInput.value);
-  if(!scanned || currentTargetRows.length === 0) return;
-  const locs = existingLocations();
-  const skuName = currentTargetRows[0]['SKU NAME'] || '';
+  if(!scanned || !currentSkuObj) return;
+  const skuName = currentSkuObj.name || '';
   const now = new Date();
   const timeStr = now.toLocaleTimeString('ar-EG',{hour:'2-digit',minute:'2-digit'});
 
-  if(locs.length === 0){
-    // brand new, accept
+  // re-check fresh in case another device already assigned it
+  const fresh = await getAssignment(currentBusiness, currentSkuCode);
+
+  if(!fresh){
+    currentAssignment = await setAssignment(currentBusiness, currentSkuCode, scanned);
     renderResult({ok:true, brandNew:true, scanned, skuName});
     pushLog(true, `${currentSkuCode} — لوكيشن جديد`, scanned, timeStr);
-  } else if(locs.some(l=>l.toLowerCase() === scanned.toLowerCase())){
+  } else if(fresh.location.toLowerCase() === scanned.toLowerCase()){
+    currentAssignment = fresh;
     renderResult({ok:true, brandNew:false, scanned, skuName});
     pushLog(true, `${currentSkuCode} — نفس اللوكيشن`, scanned, timeStr);
   } else {
-    renderResult({ok:false, scanned, correct:locs, skuName});
+    currentAssignment = fresh;
+    renderResult({ok:false, scanned, correct:[fresh.location], skuName});
     pushLog(false, `${currentSkuCode} — لوكيشن غلط`, scanned, timeStr);
   }
   scanInput.value = '';
-  renderDetails();
+  peekTab.classList.add('show');
+  // refresh the small tag under the sku field too
+  pickedSku.querySelector('.loc-tag, .loc-tag.none')?.replaceWith((()=>{
+    const span = document.createElement('span');
+    if(currentAssignment){ span.className='loc-tag'; span.textContent = `📍 ${currentAssignment.location}`; }
+    else { span.className='loc-tag none'; span.textContent='مفيش لوكيشن متسجل - أول مرة'; }
+    return span;
+  })());
 }
 
 function renderResult(r){
@@ -555,32 +589,36 @@ async function loadLog(){
   }catch(e){}
 }
 
-// details bottom sheet
+// details bottom sheet — shows the assignment this tool itself built, not sheet data
 function renderDetails(){
-  if(currentTargetRows.length===0){ sheetBody.innerHTML=''; return; }
-  sheetBody.innerHTML = currentTargetRows.map((r,i)=>`
-    <div style="margin-bottom:14px;">
-      ${currentTargetRows.length>1 ? `<div style="font-size:11.5px;color:var(--sub);font-weight:700;margin:10px 0 8px;">صف ${i+1} من ${currentTargetRows.length}</div>` : ''}
-      <div class="detail-grid">
-        <div class="detail-cell wide"><div class="k">اللوكيشن</div><div class="v">${escapeHtml(r['LOCATION BARCODE']||'—')}</div></div>
-        <div class="detail-cell"><div class="k">نوع اللوكيشن</div><div class="v">${escapeHtml(r['LOCATION TYPE']||'—')}</div></div>
-        <div class="detail-cell"><div class="k">الباتش</div><div class="v">${escapeHtml(r['BATCH NUMBER']||'—')}</div></div>
-        <div class="detail-cell"><div class="k">كمية سليمة</div><div class="v">${escapeHtml(r['LOCATION PASS QUANTITY']||'0')}</div></div>
-        <div class="detail-cell"><div class="k">كمية تالفة</div><div class="v">${escapeHtml(r['LOCATION FAIL QUANTITY']||'0')}</div></div>
-        <div class="detail-cell"><div class="k">كمية منتهية</div><div class="v">${escapeHtml(r['LOCATION EXPIRED QUANTITY']||'0')}</div></div>
-        <div class="detail-cell"><div class="k">الهب</div><div class="v">${escapeHtml(r['HUB NAME']||'—')}</div></div>
-        <div class="detail-cell wide"><div class="k">باركود الصنف</div><div class="v">${escapeHtml(r['SKU BARCODE']||'—')}</div></div>
-        <div class="detail-cell"><div class="k">Cycle status</div><div class="v">${escapeHtml(r['cycle status']||'—')}</div></div>
-        <div class="detail-cell"><div class="k">Consolidation</div><div class="v">${escapeHtml(r['consolidation status']||'—')}</div></div>
-        <div class="detail-cell"><div class="k">المساحة (CBM)</div><div class="v">${escapeHtml(r['SPACE OCCUPIED (CBM)']||'—')}</div></div>
-        <div class="detail-cell"><div class="k">التاريخ</div><div class="v">${escapeHtml(r['date']||'—')}</div></div>
-      </div>
+  if(!currentSkuObj){ sheetBody.innerHTML=''; return; }
+  const a = currentAssignment;
+  const when = a ? new Date(a.updatedAt).toLocaleString('ar-EG',{dateStyle:'medium', timeStyle:'short'}) : '—';
+  sheetBody.innerHTML = `
+    <div class="detail-grid" style="margin-top:6px;">
+      <div class="detail-cell wide"><div class="k">الـ SKU</div><div class="v">${escapeHtml(currentSkuObj.code)}</div></div>
+      <div class="detail-cell wide"><div class="k">اسم الصنف</div><div class="v">${escapeHtml(currentSkuObj.name || '—')}</div></div>
+      <div class="detail-cell wide"><div class="k">البيزنس</div><div class="v">${escapeHtml(currentBusiness)}</div></div>
+      <div class="detail-cell wide"><div class="k">اللوكيشن المتسجل</div><div class="v">${a ? escapeHtml(a.location) : 'مفيش لسه'}</div></div>
+      <div class="detail-cell wide"><div class="k">آخر تحديث</div><div class="v" style="font-size:12px;">${escapeHtml(when)}</div></div>
     </div>
-  `).join('<div style="height:1px;background:var(--line);margin:4px 0;"></div>');
+    ${a ? `<button id="clearAssignBtn" style="width:100%;margin-top:14px;background:var(--panel-2);border:1px solid var(--red);color:var(--red);font-family:'Cairo',sans-serif;font-weight:700;font-size:13px;padding:11px;border-radius:10px;cursor:pointer;">امسح التسجيل ده</button>` : ''}
+  `;
+  const btn = el('clearAssignBtn');
+  if(btn){
+    btn.addEventListener('click', async ()=>{
+      btn.disabled = true; btn.textContent = 'جاري المسح...';
+      await clearAssignment(currentBusiness, currentSkuCode);
+      currentAssignment = null;
+      resultBox.classList.remove('show');
+      showPicked(currentSkuObj);
+      closeSheet();
+    });
+  }
 }
 
 function openSheet(){
-  if(currentTargetRows.length===0) return;
+  if(!currentSkuObj) return;
   renderDetails();
   sheet.classList.add('show');
   sheetOverlay.classList.add('show');
@@ -624,6 +662,15 @@ handleArea.addEventListener('mousedown', e=>{
 scanInput.addEventListener('keydown', e=>{ if(e.key==='Enter') confirmScan(); });
 el('scanGo').addEventListener('click', confirmScan);
 el('refreshBtn').addEventListener('click', loadData);
+el('newSortBtn').addEventListener('click', ()=>{
+  businessInput.value = '';
+  skuInput.value = '';
+  el('clearBusiness').classList.remove('show');
+  el('clearSku').classList.remove('show');
+  renderSkuList();
+  resetTarget();
+  businessInput.focus();
+});
 
 loadData();
 loadLog();
