@@ -259,7 +259,8 @@
     <span id="statusText"><span class="dot loading" id="statusDot"></span>بيحمل الداتا من الشيت...</span>
     <div style="display:flex;gap:8px;">
       <button id="newSortBtn" style="background:var(--yellow);border:none;color:#1a1a1a;font-family:'Cairo',sans-serif;font-size:12px;font-weight:800;padding:6px 12px;border-radius:8px;cursor:pointer;">↻ سورت جديد</button>
-      <button id="refreshBtn">تحديث</button>
+      <button id="resetAllBtn" style="background:#c62828;border:none;color:#fff;font-family:'Cairo',sans-serif;font-size:12px;font-weight:800;padding:6px 12px;border-radius:8px;cursor:pointer;">🗑 Reset</button>
+<button id="refreshBtn">تحديث</button>
     </div>
   </div>
 
@@ -448,21 +449,21 @@ function tryPickSku(){
 // ---- assignment storage: purely built inside the tool, not from the sheet ----
 // shared:true so every user of this tool sees the same location assignments
 function assignmentKey(business, code){
-  return `loc:${business}||${code}`;
+  return `loc:${business}||${code}`.slice(0,190);
 }
 async function getAssignment(business, code){
   try{
-    const data=localStorage.getItem(assignmentKey(business,code));
-    return data?JSON.parse(data):null;
-  }catch(e){return null;}
+    const r = await window.storage.get(assignmentKey(business, code), true);
+    return (r && r.value) ? JSON.parse(r.value) : null;
+  }catch(e){ return null; }
 }
 async function setAssignment(business, code, location){
-  const payload={location,updatedAt:new Date().toISOString()};
-  try{localStorage.setItem(assignmentKey(business,code),JSON.stringify(payload));}catch(e){}
+  const payload = {location, updatedAt: new Date().toISOString()};
+  try{ await window.storage.set(assignmentKey(business, code), JSON.stringify(payload), true); }catch(e){}
   return payload;
 }
 async function clearAssignment(business, code){
-  try{localStorage.removeItem(assignmentKey(business,code));}catch(e){}
+  try{ await window.storage.delete(assignmentKey(business, code), true); }catch(e){}
 }
 
 async function showPicked(chosen){
@@ -580,12 +581,12 @@ function renderLog(){
 }
 
 async function saveLog(){
-  try{localStorage.setItem('sort-tool:log',JSON.stringify(sessionLog));}catch(e){}
+  try{ await window.storage.set('sort-tool:log', JSON.stringify(sessionLog)); }catch(e){}
 }
 async function loadLog(){
   try{
-    const data=localStorage.getItem('sort-tool:log');
-    if(data){sessionLog=JSON.parse(data);renderLog();}
+    const r = await window.storage.get('sort-tool:log');
+    if(r && r.value){ sessionLog = JSON.parse(r.value); renderLog(); }
   }catch(e){}
 }
 
@@ -670,6 +671,15 @@ el('newSortBtn').addEventListener('click', ()=>{
   renderSkuList();
   resetTarget();
   businessInput.focus();
+});
+
+el('resetAllBtn').addEventListener('click',()=>{
+if(!confirm('سيتم حذف جميع اللوكيشنات واللوج. هل أنت متأكد؟')) return;
+Object.keys(localStorage).forEach(k=>{if(k.startsWith('loc:')) localStorage.removeItem(k);});
+localStorage.removeItem('sort-tool:log');
+sessionLog=[];renderLog();resetTarget();
+businessInput.value='';skuInput.value='';renderSkuList();
+alert('تم عمل Reset بنجاح');
 });
 
 loadData();
