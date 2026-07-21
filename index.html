@@ -446,33 +446,23 @@ function tryPickSku(){
   showPicked(chosen);
 }
 
-// ---- assignment storage: purely built inside the tool, not from the sheet ----
-// shared:true so every user of this tool sees the same location assignments
+// ---- assignment storage: localStorage, per-device, zero setup ----
 function assignmentKey(business, code){
   return `loc:${business}||${code}`.slice(0,190);
 }
 async function getAssignment(business, code){
   try{
-    const r = await window.storage.get(assignmentKey(business, code), true);
-    return (r && r.value) ? JSON.parse(r.value) : null;
+    const raw = localStorage.getItem(assignmentKey(business, code));
+    return raw ? JSON.parse(raw) : null;
   }catch(e){ return null; }
 }
-async function setAssignment(business, code, location) {
-    const payload = {
-        location: location,
-        updatedAt: new Date().toISOString()
-    };
-
-    const key = assignmentKey(business, code);
-
-    console.log("Saving:", key, payload);
-
-    localStorage.setItem(key, JSON.stringify(payload));
-
-    return payload;
+async function setAssignment(business, code, location){
+  const payload = { location, updatedAt: new Date().toISOString() };
+  try{ localStorage.setItem(assignmentKey(business, code), JSON.stringify(payload)); }catch(e){}
+  return payload;
 }
 async function clearAssignment(business, code){
-  try{ await window.storage.delete(assignmentKey(business, code), true); }catch(e){}
+  try{ localStorage.removeItem(assignmentKey(business, code)); }catch(e){}
 }
 
 async function showPicked(chosen){
@@ -590,12 +580,12 @@ function renderLog(){
 }
 
 async function saveLog(){
-  try{ await window.storage.set('sort-tool:log', JSON.stringify(sessionLog)); }catch(e){}
+  try{ localStorage.setItem('sort-tool:log', JSON.stringify(sessionLog)); }catch(e){}
 }
 async function loadLog(){
   try{
-    const r = await window.storage.get('sort-tool:log');
-    if(r && r.value){ sessionLog = JSON.parse(r.value); renderLog(); }
+    const raw = localStorage.getItem('sort-tool:log');
+    if(raw){ sessionLog = JSON.parse(raw); renderLog(); }
   }catch(e){}
 }
 
