@@ -50,6 +50,7 @@
     background:var(--panel);border:1px solid var(--line);
     border-radius:12px;padding:9px 13px;margin-bottom:14px;
     font-size:12.5px;color:var(--sub);
+    flex-wrap:wrap;gap:8px;
   }
   .status-row button{
     background:none;border:1px solid var(--line);color:var(--paper);
@@ -257,8 +258,9 @@
 
   <div class="status-row">
     <span id="statusText"><span class="dot loading" id="statusDot"></span>بيحمل الداتا من الشيت...</span>
-    <div style="display:flex;gap:8px;">
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
       <button id="newSortBtn" style="background:var(--yellow);border:none;color:#1a1a1a;font-family:'Cairo',sans-serif;font-size:12px;font-weight:800;padding:6px 12px;border-radius:8px;cursor:pointer;">↻ سورت جديد</button>
+      <button id="exportCsvBtn" style="background:#2e7d32;border:none;color:#fff;font-family:'Cairo',sans-serif;font-size:12px;font-weight:800;padding:6px 12px;border-radius:8px;cursor:pointer;">⬇ CSV</button>
       <button id="resetAllBtn" style="background:#c62828;border:none;color:#fff;font-family:'Cairo',sans-serif;font-size:12px;font-weight:800;padding:6px 12px;border-radius:8px;cursor:pointer;">🗑 Reset</button>
 <button id="refreshBtn">تحديث</button>
     </div>
@@ -589,6 +591,33 @@ async function loadLog(){
   }catch(e){}
 }
 
+// ---- CSV export: exports all saved location assignments from localStorage ----
+function exportCSV(){
+  const keys = Object.keys(localStorage).filter(k=>k.startsWith('loc:'));
+  if(keys.length===0){ alert('مفيش لوكيشنات متسجلة عشان تتصدر'); return; }
+  const rowsOut = [['Business','SKU','Location','UpdatedAt']];
+  keys.forEach(k=>{
+    try{
+      const data = JSON.parse(localStorage.getItem(k));
+      const rest = k.slice(4); // remove 'loc:' prefix
+      const sepIdx = rest.indexOf('||');
+      const business = sepIdx>=0 ? rest.slice(0,sepIdx) : '';
+      const sku = sepIdx>=0 ? rest.slice(sepIdx+2) : rest;
+      rowsOut.push([business, sku, data.location || '', data.updatedAt || '']);
+    }catch(e){}
+  });
+  const csv = rowsOut.map(r=>r.map(v=>`"${(v||'').toString().replace(/"/g,'""')}"`).join(',')).join('\n');
+  const blob = new Blob(['\uFEFF'+csv], {type:'text/csv;charset=utf-8;'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `sort-export-${new Date().toISOString().slice(0,10)}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 // details bottom sheet — shows the assignment this tool itself built, not sheet data
 function renderDetails(){
   if(!currentSkuObj){ sheetBody.innerHTML=''; return; }
@@ -662,6 +691,7 @@ handleArea.addEventListener('mousedown', e=>{
 scanInput.addEventListener('keydown', e=>{ if(e.key==='Enter') confirmScan(); });
 el('scanGo').addEventListener('click', confirmScan);
 el('refreshBtn').addEventListener('click', loadData);
+el('exportCsvBtn').addEventListener('click', exportCSV);
 el('newSortBtn').addEventListener('click', ()=>{
   businessInput.value = '';
   skuInput.value = '';
